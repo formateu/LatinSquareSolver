@@ -1,6 +1,7 @@
-import Data.Char
-import Data.List
-import Data.Function
+import           Control.Applicative ((<|>))
+import           Data.Char           (digitToInt)
+import           Data.Function       (on)
+import           Data.List           (foldl', minimumBy, transpose, (\\))
 
 data Cell = Fixed Int | Possible [Int] deriving (Show, Eq)
 type Row  = [Cell]
@@ -10,7 +11,7 @@ showGrid :: Grid -> String
 showGrid = unlines . map (unwords . map showCell)
   where
     showCell (Fixed x) = show x
-    showCell _ = "."
+    showCell _         = "."
 
 showGridWithPossibilities :: Grid -> String
 showGridWithPossibilities = unlines . map (unwords . map showCell)
@@ -18,95 +19,80 @@ showGridWithPossibilities = unlines . map (unwords . map showCell)
     showCell (Fixed x)     = show x ++ "  "
     showCell (Possible xs) =
       (++ "]")
-      . Data.List.foldl' (\acc x -> acc ++ if x `elem` xs then show x else " ") "["
+      . foldl' (\acc x -> acc ++ if x `elem` xs then show x else " ") "["
       $ [1..4]
 
 generateCell :: Int -> Cell
 generateCell size = Possible [1..size]
 
 generateRow :: Int -> Row
-generateRow size = generateInternal size size
-    where generateInternal 0 _ = []
-          generateInternal currPos n = (generateCell size):(generateInternal (currPos-1) n)
+generateRow size = replicate size (generateCell size)
 
 generateGrid :: Int -> Grid
-generateGrid size = generateInternal size size
-    where generateInternal 0 _ = []
-          generateInternal currPos n = (generateRow size):(generateInternal (currPos-1) n)
+generateGrid size = replicate size (generateRow size)
 
 readViews :: String -> [Int]
-readViews s = fmap readCell s
+readViews = fmap readCell
     where readCell '.' = 0
-          readCell c = Data.Char.digitToInt $ c
+          readCell c   = digitToInt c
 
 readInt :: IO Int
 readInt = do
     int <- getLine
     return (read int)
 
-removeFromList :: Eq a => a -> [a] -> [a]
-removeFromList _ []                 = []
-removeFromList x (y:ys) | x == y    = removeFromList x ys
-                    | otherwise = y : removeFromList x ys
-
 removeFrom :: Int -> Cell -> Cell
 removeFrom toRemove (Fixed value)
     | value == toRemove = Possible []
-
-removeFrom toRemove (Possible intList) = Possible (removeFromList toRemove intList)
+removeFrom toRemove (Possible intList) = Possible (filter (/= toRemove) intList)
 
 removeIncremental :: Int -> Int -> Row -> Row
-removeIncremental howManyWeSee problemSize row = removeGEGrowing (problemSize-howManyWeSee+2) problemSize row
+removeIncremental howManyWeSee problemSize = removeGEGrowing (problemSize-howManyWeSee+2) problemSize
 
 removeGEGrowing :: Int -> Int -> Row -> Row
 removeGEGrowing h p (x:xs)
-    | h <= p =  (removeGE h x):(removeGEGrowing (h+1) p xs)
+    | h <= p =  removeGE h x : removeGEGrowing (h+1) p xs
     | otherwise = x:xs
 
 removeGEGrowing _ _ [] = []
 
 removeGE :: Int -> Cell -> Cell
-removeGE toRemove (Possible list) = Possible (removeGEInt toRemove list)
+removeGE toRemove (Possible list) = Possible (takeWhile (< toRemove) list)
 
 removeGE toRemove (Fixed n)
     | n == toRemove = Possible []
     | otherwise = Fixed n
 
-removeGEInt :: Int -> [Int] -> [Int]
-removeGEInt toRemove (l:ls)
-    | l < toRemove = l:(removeGEInt toRemove ls)
-    | otherwise = []
-
 applyViewImpl :: Int -> Int -> Row -> Row
 applyViewImpl problemSize howManyWeSee (xs:ys)
     | howManyWeSee == 0 = (xs:ys)
     | howManyWeSee == problemSize = fmap Fixed [1..problemSize]
-    | howManyWeSee == 1 = (Fixed problemSize):ys
-    | howManyWeSee == 2 = (removeFrom problemSize xs):ys
+    | howManyWeSee == 1 = Fixed problemSize : ys
+    | howManyWeSee == 2 = removeFrom problemSize xs :ys
     | otherwise = removeIncremental howManyWeSee problemSize (xs:ys)
 
-applyView :: Int -> [Int] -> (Grid -> Grid) -> Grid -> Grid
-applyView problemSize upperView transformFunc grid = transformFunc (map (\(a,b) -> applyViewImpl problemSize a b) $ zip upperView $ transformFunc grid)
+applyView :: (Grid -> Grid) -> Int -> [Int] ->  Grid -> Grid
+applyView transformFunc problemSize upperView grid = transformFunc (zipWith (applyViewImpl problemSize) upperView (transformFunc grid))
 
 applyUpperView :: Int -> [Int] -> Grid -> Grid
-applyUpperView problemSize upperView grid = applyView problemSize upperView transpose grid
+applyUpperView = applyView transpose
 
 applyLeftView :: Int -> [Int] -> Grid -> Grid
-applyLeftView problemSize leftView grid =  applyView problemSize leftView id grid
+applyLeftView  = applyView id
 
 applyRightView :: Int -> [Int] -> Grid -> Grid
-applyRightView problemSize rightView grid = applyView problemSize rightView (transpose . reverse . transpose) grid
+applyRightView = applyView (transpose . reverse . transpose)
 
 applyBottomView :: Int -> [Int] -> Grid -> Grid
 -- applyBottomView problemSize bottomView grid = applyView problemSize bottomView (reverse . transpose) grid
-applyBottomView problemSize bottomView grid = transpose $ reverse (map (\(a,b) -> applyViewImpl problemSize a b) $ zip bottomView $ reverse $ transpose grid)
+applyBottomView problemSize bottomView grid = transpose $ reverse (zipWith (applyViewImpl problemSize) bottomView $ reverse $ transpose grid)
 
 pruneCells :: [Cell] -> Maybe [Cell]
 pruneCells cells = traverse pruneCell cells
   where
     fixeds = [x | Fixed x <- cells]
 
-    pruneCell (Possible xs) = case xs Data.List.\\ fixeds of
+    pruneCell (Possible xs) = case xs \\ fixeds of
       []  -> Nothing
       [y] -> Just $ Fixed y
       ys  -> Just $ Possible ys
@@ -135,7 +121,7 @@ nextGrids :: Int -> Grid -> (Grid, Grid)
 nextGrids problemSize grid =
   let (i, first@(Fixed _), rest) =
         fixCell
-        . Data.List.minimumBy (compare `Data.Function.on` (possibilityCount . snd))
+        . minimumBy (compare `on` (possibilityCount . snd))
         . filter (isPossible . snd)
         . zip [0..]
         . concat
@@ -158,12 +144,15 @@ nextGrids problemSize grid =
     replace p f xs = [if i == p then f x else x | (x, i) <- zip xs [0..]]
 
 isGridFilled :: Grid -> Bool
-isGridFilled grid = null [ () | Possible _ <- concat grid ]
+isGridFilled = any isPossible . concat
+  where
+    isPossible (Possible _) = True
+    isPossible _            = False
 
 isGridInvalid :: Grid -> Bool
 isGridInvalid grid =
   any isInvalidRow grid
-  || any isInvalidRow (Data.List.transpose grid)
+  || any isInvalidRow (transpose grid)
   where
     isInvalidRow row =
       let fixeds         = [x | Fixed x <- row]
@@ -178,14 +167,14 @@ isGridInvalid grid =
       | otherwise   = hasDups' ys (y:xs)
 
 solve :: Int -> Grid -> Maybe Grid
-solve problemSize grid = pruneGrid grid >>= (solve' problemSize)
+solve problemSize grid = pruneGrid grid >>= solve' problemSize
   where
     solve' ps g
       | isGridInvalid g = Nothing
       | isGridFilled g  = Just g
       | otherwise       =
           let (grid1, grid2) = nextGrids ps g
-          in (solve ps grid1) <|> (solve ps grid2)
+          in solve ps grid1 <|> solve ps grid2
 
 main :: IO ()
 main = do print "Enter problem size"
@@ -208,5 +197,5 @@ main = do print "Enter problem size"
           let afterUp = applyUpperView problemSize upperViews afterRight
           let afterBot = applyBottomView problemSize bottomViews afterUp
           case pruneGrid afterBot of
-              Just a -> putStrLn $ showGridWithPossibilities a
+              Just a  -> putStrLn $ showGridWithPossibilities a
               Nothing -> print "Program failed"
